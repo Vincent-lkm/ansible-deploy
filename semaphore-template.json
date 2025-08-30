@@ -1,0 +1,49 @@
+{
+  "name": "Live Head Monitoring",
+  "description": "Lance le script de monitoring live_head sur les serveurs sélectionnés",
+  "project_id": 1,
+  "inventory_id": "{{ inventory_id }}",
+  "repository_id": "{{ repository_id }}",
+  "environment_id": "{{ environment_id }}",
+  "playbook": "playbooks/run-live-head-parametrable.yml",
+  "arguments": [
+    {
+      "name": "target_group",
+      "title": "Groupe(s) cible(s)",
+      "description": "Spécifiez le groupe ou 'all' pour tous",
+      "type": "string",
+      "default": "all"
+    },
+    {
+      "name": "dry_run", 
+      "title": "Mode Dry-Run",
+      "description": "Simulation sans exécution réelle",
+      "type": "boolean",
+      "default": false
+    },
+    {
+      "name": "auth_token",
+      "title": "Token d'authentification",
+      "description": "Token pour l'API live_head",
+      "type": "password",
+      "required": true
+    }
+  ],
+  "allow_override_args_in_task": true,
+  "survey_enabled": true,
+  "survey_vars": [
+    {
+      "name": "INFRA",
+      "title": "Infrastructure",
+      "type": "enum",
+      "options": ["infra1", "infra2", "infra3", "infra4", "tier1"],
+      "required": true
+    },
+    {
+      "name": "GROUP",
+      "title": "Groupe(s)",
+      "type": "string",
+      "default": "all"
+    }
+  ]
+}
