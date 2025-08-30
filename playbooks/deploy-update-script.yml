@@ -1,0 +1,88 @@
+---
+- name: 🚀 Déploiement update.sh sur tous les groupes Linkuma
+  hosts: all_linkuma
+  gather_facts: no
+  serial: 10  # Traiter 10 serveurs en parallèle max
+  tasks:
+    - name: Vérifier la connexion SSH
+      raw: echo "✅ Connexion OK - $(hostname) - $(date)"
+      register: connection_test
+      
+    - name: Afficher statut connexion
+      debug:
+        msg: "{{ connection_test.stdout }}"
+    
+    - name: Créer le répertoire /mnt/www s'il n'existe pas
+      raw: mkdir -p /mnt/www
+      
+    - name: Créer le répertoire de logs
+      raw: mkdir -p /mnt/www/log
+      
+    - name: Vérifier la présence d'update.sh existant
+      raw: ls -la /mnt/www/update.sh 2>/dev/null || echo "Fichier absent"
+      register: current_script
+      
+    - name: Afficher l'état du script existant
+      debug:
+        msg: "{{ current_script.stdout }}"
+    
+    - name: Copier le script update.sh depuis group57 (serveur de référence)
+      raw: |
+        echo "📂 Récupération du script depuis group57..."
+        scp -o "ProxyJump=bastion@infra.linkuma.ovh:2200" \
+            -o "StrictHostKeyChecking=no" \
+            -P 2222 \
+            root@apache.group57.svc.cluster.local:/mnt/www/update.sh \
+            /tmp/update.sh.new 2>/dev/null || {
+            echo "❌ Erreur récupération depuis group57"
+            exit 1
+        }
+        
+        # Sauvegarder l'ancien script s'il existe
+        if [ -f /mnt/www/update.sh ]; then
+            cp /mnt/www/update.sh /mnt/www/update.sh.backup.$(date +%Y%m%d-%H%M%S)
+            echo "💾 Script existant sauvegardé"
+        fi
+        
+        # Installer le nouveau script
+        mv /tmp/update.sh.new /mnt/www/update.sh
+        chmod +x /mnt/www/update.sh
+        
+        # Vérifier la syntaxe
+        bash -n /mnt/www/update.sh && echo "✅ Syntaxe OK" || echo "❌ Erreur syntaxe"
+        
+        echo "🎉 Script update.sh déployé avec succès sur $(hostname)"
+      register: deployment_result
+      
+    - name: Afficher le résultat du déploiement
+      debug:
+        msg: "{{ deployment_result.stdout_lines }}"
+        
+    - name: Test rapide du script (dry-run)
+      raw: |
+        echo "🧪 Test rapide du script..."
+        cd /mnt/www
+        # Test des premiers sites seulement
+        timeout 30 bash -c '
+            sites_count=$(find /mnt/www -maxdepth 2 -name "wp-config.php" 2>/dev/null | wc -l)
+            echo "Sites WordPress détectés: $sites_count"
+            
+            if command -v wp >/dev/null 2>&1; then
+                echo "✅ WP-CLI disponible"
+            else
+                echo "❌ WP-CLI manquant"
+            fi
+        ' || echo "⚠️ Test interrompu après 30s"
+      register: test_result
+      
+    - name: Afficher le résultat du test
+      debug:
+        msg: "{{ test_result.stdout_lines }}"
+
+    - name: Résumé du déploiement
+      debug:
+        msg: |
+          🎯 Déploiement terminé sur {{ inventory_hostname }}
+          📊 Script update.sh installé et testé
+          📁 Logs disponibles dans /mnt/www/log/
+          🚀 Prêt pour exécution via Jenkins

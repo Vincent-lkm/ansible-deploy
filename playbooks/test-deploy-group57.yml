@@ -1,0 +1,64 @@
+---
+- name: Test Deploy update.sh sur Group57 - Version sans pkill
+  hosts: group57_only
+  gather_facts: no
+  tasks:
+    - name: "1️⃣ Vérifier l'existence du script update.sh"
+      raw: |
+        if [ -f /mnt/www/update.sh ]; then
+          echo "✅ Script /mnt/www/update.sh trouvé"
+          ls -la /mnt/www/update.sh
+        else
+          echo "❌ Script /mnt/www/update.sh introuvable"
+          ls -la /mnt/www/ 2>/dev/null || echo "Répertoire /mnt/www/ inexistant"
+        fi
+      register: script_check
+      
+    - name: "📋 Afficher le statut du script"
+      debug:
+        msg: "{{ script_check.stdout_lines }}"
+        
+    - name: "2️⃣ Vérifier les processus update.sh existants"
+      raw: |
+        echo "🔍 Processus update.sh actuellement actifs:"
+        ps aux | grep update.sh | grep -v grep || echo "Aucun processus update.sh actif"
+      register: process_check
+      
+    - name: "📊 État des processus"
+      debug:
+        msg: "{{ process_check.stdout_lines }}"
+        
+    - name: "3️⃣ Lancer le script update.sh avec monitoring"
+      raw: |
+        if [ -f /mnt/www/update.sh ]; then
+          LOG_FILE="/tmp/up-test-$(date +%Y%m%d-%H%M%S).log"
+          echo "🚀 Lancement du script update.sh..."
+          echo "📋 Log: $LOG_FILE"
+          
+          chmod +x /mnt/www/update.sh
+          cd /mnt/www
+          nohup ./update.sh > "$LOG_FILE" 2>&1 &
+          NEW_PID=$!
+          echo "✅ Script lancé, PID: $NEW_PID"
+          
+          echo "⏳ Attente 5 secondes pour vérifier le démarrage..."
+          sleep 5
+          
+          if ps -p $NEW_PID > /dev/null 2>&1; then
+            echo "✅ Processus $NEW_PID toujours actif - Script en cours"
+            echo "📄 Premières lignes du log:"
+            head -3 "$LOG_FILE" 2>/dev/null || echo "Log en cours de création..."
+          else
+            echo "❌ Processus $NEW_PID terminé - Vérification des logs:"
+            cat "$LOG_FILE" 2>/dev/null || echo "Aucun log généré"
+          fi
+          
+          echo "📁 Log complet disponible: $LOG_FILE"
+        else
+          echo "⚠️ Impossible de lancer : script introuvable"
+        fi
+      register: deploy_result
+      
+    - name: "📊 Résultat final du déploiement"
+      debug:
+        msg: "{{ deploy_result.stdout_lines }}"

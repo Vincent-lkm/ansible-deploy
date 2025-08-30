@@ -1,0 +1,20 @@
+---
+- name: Deploy avec logs dans /mnt/www/log/
+  hosts: group57_only
+  gather_facts: no
+  tasks:
+    - name: Créer répertoire de logs
+      raw: mkdir -p /mnt/www/log
+      
+    - name: Lancer le script avec logs personnalisés
+      raw: |
+        echo "🚀 Lancement du script up.sh avec logs dans /mnt/www/log/"
+        nohup /mnt/www/up.sh > /mnt/www/log/up-$(date +%Y%m%d-%H%M%S).log 2>&1 &
+        echo "✅ Script lancé, PID: $!"
+        echo "📋 Log disponible dans /mnt/www/log/"
+        ls -la /mnt/www/log/
+      register: deploy_result
+      
+    - name: Afficher le résultat
+      debug:
+        msg: "{{ deploy_result.stdout_lines }}"

@@ -1,0 +1,38 @@
+# Ansible
+*.retry
+*.log
+.ansible/
+ansible.log
+
+# Secrets
+*.pem
+*.key
+*_key
+*.vault
+vault_pass.txt
+.vault_pass
+
+# Temp files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Backups
+*.bak
+*.backup
+*.old
+
+# Logs
+logs/
+*.log

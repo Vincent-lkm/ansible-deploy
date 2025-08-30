@@ -1,0 +1,67 @@
+# INVENTORY TIER1 - 12 GROUPES (évolutif)
+# ProxyJump: root@tier1.linkuma.ovh:2200
+
+# === GROUPES INDIVIDUELS ===
+[group01_only]
+apache.group01.svc.cluster.local
+
+[group02_only]
+apache.group02.svc.cluster.local
+
+[group03_only]
+apache.group03.svc.cluster.local
+
+[group04_only]
+apache.group04.svc.cluster.local
+
+[group05_only]
+apache.group05.svc.cluster.local
+
+[group06_only]
+apache.group06.svc.cluster.local
+
+[group07_only]
+apache.group07.svc.cluster.local
+
+[group08_only]
+apache.group08.svc.cluster.local
+
+[group09_only]
+apache.group09.svc.cluster.local
+
+[group10_only]
+apache.group10.svc.cluster.local
+
+[group11_only]
+apache.group11.svc.cluster.local
+
+[group12_only]
+apache.group12.svc.cluster.local
+
+# === BATCHES (GROUPES DE 10) ===
+[batch1]
+apache.group01.svc.cluster.local
+apache.group02.svc.cluster.local
+apache.group03.svc.cluster.local
+apache.group04.svc.cluster.local
+apache.group05.svc.cluster.local
+apache.group06.svc.cluster.local
+apache.group07.svc.cluster.local
+apache.group08.svc.cluster.local
+apache.group09.svc.cluster.local
+apache.group10.svc.cluster.local
+
+[batch2]
+apache.group11.svc.cluster.local
+apache.group12.svc.cluster.local
+
+# === GROUPES GLOBAUX ===
+[all_tier1:children]
+batch1
+batch2
+
+# === VARIABLES COMMUNES ===
+[all:vars]
+ansible_ssh_common_args='-o ProxyJump=root@tier1.linkuma.ovh:2200 -o StrictHostKeyChecking=no'
+ansible_port=2222
+ansible_user=root

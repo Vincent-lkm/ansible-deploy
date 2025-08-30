@@ -1,0 +1,31 @@
+---
+- name: Kill brutal tous les processus update.sh sur Batch1 (10 serveurs)
+  hosts: batch1
+  gather_facts: no
+  tasks:
+    - name: "💀 Kill brutal tous les processus update.sh"
+      raw: |
+        echo "🔍 Processus update.sh avant kill sur $(hostname):"
+        ps aux | grep update.sh | grep -v grep || echo "Aucun processus update.sh actif"
+        
+        echo ""
+        echo "💀 Kill brutal de tous les update.sh..."
+        pkill -9 -f "update.sh" 2>/dev/null && echo "✅ Processus update.sh tués sur $(hostname)" || echo "⚠️ Aucun processus update.sh à tuer sur $(hostname)"
+        
+        echo ""
+        echo "🔍 Vérification après kill:"
+        ps aux | grep update.sh | grep -v grep || echo "✅ Aucun processus update.sh restant sur $(hostname)"
+        
+        echo ""
+        echo "🧹 Nettoyage des fichiers de lock si existants..."
+        find /mnt/www -name "*.lock" -type f 2>/dev/null | while read lockfile; do
+          echo "🗑️ Suppression: $lockfile"
+          rm -f "$lockfile"
+        done || echo "Aucun fichier lock trouvé"
+        
+        echo "✅ Kill terminé sur $(hostname)"
+      register: kill_result
+      
+    - name: "📊 Résultat du kill"
+      debug:
+        msg: "{{ kill_result.stdout_lines }}"

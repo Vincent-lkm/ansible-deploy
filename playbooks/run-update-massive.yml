@@ -1,0 +1,90 @@
+---
+- name: 🚀 Lancement massif update.sh - 75 groupes Linkuma
+  hosts: "{{ target_groups | default('all_linkuma') }}"
+  gather_facts: no
+  serial: "{{ max_parallel | default(5) }}"  # 5 serveurs en parallèle par défaut
+  tasks:
+    - name: Pré-vérifications
+      raw: |
+        echo "=== PRÉ-VÉRIFICATIONS $(hostname) ==="
+        echo "🕐 Début: $(date)"
+        
+        # Vérifier l'espace disque
+        df -h /mnt/www | grep -v Filesystem
+        
+        # Vérifier la charge
+        uptime
+        
+        # Vérifier que le script existe et est exécutable
+        if [ ! -x /mnt/www/update.sh ]; then
+            echo "❌ Script update.sh manquant ou non exécutable"
+            exit 1
+        fi
+        
+        # Vérifier qu'il n'y a pas d'autre update en cours
+        if pgrep -f "update.sh" >/dev/null; then
+            echo "⚠️ Un autre update.sh est déjà en cours"
+            pgrep -f "update.sh"
+            exit 1
+        fi
+        
+        echo "✅ Pré-vérifications OK"
+      register: precheck_result
+      
+    - name: Afficher pré-vérifications
+      debug:
+        msg: "{{ precheck_result.stdout_lines }}"
+    
+    - name: Lancer update.sh avec monitoring complet
+      raw: |
+        export LOG_FILE="/mnt/www/log/update-massive-$(date +%Y%m%d-%H%M%S).log"
+        mkdir -p /mnt/www/log
+        
+        echo "=== DÉMARRAGE UPDATE MASSIF - $(date) ===" | tee "$LOG_FILE"
+        echo "🖥️ Serveur: $(hostname)" | tee -a "$LOG_FILE"  
+        echo "🎯 Job: Déploiement Massif 75 Groupes" | tee -a "$LOG_FILE"
+        echo "📁 Log: $LOG_FILE" | tee -a "$LOG_FILE"
+        echo "🔢 Sites WordPress: $(find /mnt/www -maxdepth 2 -name 'wp-config.php' 2>/dev/null | wc -l)" | tee -a "$LOG_FILE"
+        echo "⚡ Parallélisme: {{ max_parallel | default(5) }}" | tee -a "$LOG_FILE"
+        echo "=============================================" | tee -a "$LOG_FILE"
+        
+        # Lancer le script avec parallélisme optimisé
+        MAX_PARALLEL={{ script_parallel | default(1) }}
+        echo "🚀 Lancement update.sh avec MAX_PARALLEL=$MAX_PARALLEL..." | tee -a "$LOG_FILE"
+        
+        /mnt/www/update.sh $MAX_PARALLEL 2>&1 | while IFS= read -r line; do
+            echo "$(date '+%H:%M:%S') $line" | tee -a "$LOG_FILE"
+        done
+        
+        EXIT_CODE=${PIPESTATUS[0]}
+        echo "=============================================" | tee -a "$LOG_FILE"
+        echo "=== FIN UPDATE - $(date) - Code: $EXIT_CODE ===" | tee -a "$LOG_FILE"
+        echo "📁 Log complet: $LOG_FILE" | tee -a "$LOG_FILE"
+        
+        # Envoyer notification Discord finale pour ce serveur
+        if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ $(hostname) - Update terminé avec succès"
+        else
+            echo "❌ $(hostname) - Update terminé avec erreurs (code: $EXIT_CODE)"
+        fi
+        
+        exit $EXIT_CODE
+      register: update_result
+      async: 7200  # 2h timeout
+      poll: 0  # Fire & forget pour permettre le parallélisme
+      
+    - name: Vérification asynchrone du statut
+      async_status:
+        jid: "{{ update_result.ansible_job_id }}"
+      register: job_result
+      until: job_result.finished
+      retries: 240  # 240 * 30s = 2h max
+      delay: 30
+      
+    - name: Afficher le résumé final
+      debug:
+        msg: |
+          🎯 Update terminé sur {{ inventory_hostname }}
+          📊 Code de retour: {{ job_result.rc | default('N/A') }}
+          ⏱️ Durée: ~{{ ((ansible_date_time.epoch | int) - (job_start_time | default(ansible_date_time.epoch | int))) // 60 }}min
+          📁 Logs détaillés dans /mnt/www/log/update-massive-*.log
