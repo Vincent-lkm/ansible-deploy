@@ -1,0 +1,247 @@
+---
+# Playbook paramétrable pour lancer live_head.sh avec sélection d'infra et groupe
+# 
+# UTILISATION:
+# -------------
+# Pour TOUS les serveurs d'une infra:
+#   ansible-playbook -i inventories/inventory-infra1-groups playbooks/run-live-head-parametrable.yml
+#
+# Pour UN groupe spécifique:
+#   ansible-playbook -i inventories/inventory-infra1-groups playbooks/run-live-head-parametrable.yml -e "target_group=group05"
+#
+# Pour PLUSIEURS groupes:
+#   ansible-playbook -i inventories/inventory-infra1-groups playbooks/run-live-head-parametrable.yml -e "target_group=group05:group10:group15"
+#
+# Pour une INFRA différente:
+#   ansible-playbook -i inventories/inventory-infra2-groups playbooks/run-live-head-parametrable.yml
+#
+# Avec un TOKEN personnalisé:
+#   ansible-playbook -i inventories/inventory-infra1-groups playbooks/run-live-head-parametrable.yml -e "auth_token=MON_TOKEN_SECRET"
+
+- name: "Monitoring live_head - {{ target_infra | default('Tous') }} - {{ target_group | default('Tous les groupes') }}"
+  hosts: "{{ target_group | default('all') }}"
+  gather_facts: yes
+  become: yes
+  serial: "{{ batch_size | default(10) }}"  # Traite 10 serveurs à la fois
+  
+  vars:
+    # Configuration par défaut
+    script_path: "/mnt/www/update/live_head.sh"
+    worker_url: "https://live-head.restless-dust-dcc3.workers.dev/push"
+    auth_token: "{{ vault_auth_token | default(lookup('env', 'LIVE_HEAD_TOKEN')) | default('CHANGE_ME') }}"
+    
+    # Options d'exécution
+    create_if_missing: true  # Créer le script s'il n'existe pas
+    force_update: false      # Forcer la mise à jour du script même s'il existe
+    dry_run: false           # Mode simulation (ne pas exécuter)
+    
+  pre_tasks:
+    - name: Afficher les paramètres d'exécution
+      debug:
+        msg:
+          - "Infrastructure ciblée: {{ target_infra | default('Selon inventaire') }}"
+          - "Groupes ciblés: {{ target_group | default('Tous') }}"
+          - "Nombre de serveurs: {{ play_hosts | length }}"
+          - "Mode dry-run: {{ dry_run }}"
+      run_once: true
+      
+    - name: Demander confirmation si plus de 50 serveurs
+      pause:
+        prompt: "ATTENTION: Vous allez exécuter sur {{ play_hosts | length }} serveurs. Continuer? (yes/no)"
+      when: 
+        - play_hosts | length > 50
+        - not dry_run
+      run_once: true
+      register: user_confirm
+      
+    - name: Annuler si non confirmé
+      fail:
+        msg: "Exécution annulée par l'utilisateur"
+      when: 
+        - user_confirm is defined
+        - user_confirm.user_input != "yes"
+      run_once: true
+      
+  tasks:
+    - name: Collecter les informations du serveur
+      setup:
+        gather_subset:
+          - network
+          - hardware
+      when: ansible_facts.hostname is not defined
+      
+    - name: Vérifier la présence du script
+      stat:
+        path: "{{ script_path }}"
+      register: script_stat
+      
+    - name: Afficher le statut du script
+      debug:
+        msg: "Script {{ 'présent' if script_stat.stat.exists else 'absent' }} sur {{ inventory_hostname }}"
+        
+    - name: Sauvegarder l'ancien script si mise à jour forcée
+      copy:
+        src: "{{ script_path }}"
+        dest: "{{ script_path }}.backup.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+      when: 
+        - script_stat.stat.exists
+        - force_update
+        - not dry_run
+        
+    - name: Déployer/Mettre à jour le script live_head.sh
+      copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        owner: root
+        group: root
+        backup: yes
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          # Configuration
+          ROOT="/mnt/www"
+          PORT="${PORT:-8080}"
+          LOCAL_IP="$(hostname -i | awk '{print $1}')"
+          WORKER_URL="${WORKER_URL:-{{ worker_url }}}"
+          AUTH_TOKEN="${AUTH_TOKEN:-{{ auth_token }}}"
+          IGNORE_REGEX='^(update|backups|readyz|new|lost\+found)$'
+          
+          # Extraction de l'info pod (infra-group)
+          POD_INFO=$(basename /mnt/www/update/infra*-group* 2>/dev/null | head -n1)
+          POD_INFO="${POD_INFO:-{{ ansible_hostname | default('unknown') }}}"
+          
+          # Logging
+          LOG_FILE="/var/log/live_head.log"
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting live_head scan on $POD_INFO" >> "$LOG_FILE"
+          
+          results=()
+          site_count=0
+          
+          probe_one() {
+            local site="$1"
+            local url="http://${LOCAL_IP}:${PORT}/"
+            local tmp="$(mktemp)"
+          
+            # Tentative HEAD d'abord
+            read -r code time_total <<<"$(curl -sS -I \
+                -H "Host: ${site}" -H "X-Forwarded-Proto: https" \
+                --max-time 10 --connect-timeout 3 \
+                -o /dev/null -D "$tmp" \
+                -w '%{http_code} %{time_total}' \
+                "$url" || echo "000 0")"
+          
+            # Fallback GET si HEAD échoue/refuse
+            if [[ "$code" == "000" || "$code" == "405" || "$code" == "400" ]]; then
+              : > "$tmp"
+              read -r code time_total <<<"$(curl -sS \
+                  -H "Host: ${site}" -H "X-Forwarded-Proto: https" \
+                  --max-time 10 --connect-timeout 3 \
+                  --range 0-0 -X GET \
+                  -o /dev/null -D "$tmp" \
+                  -w '%{http_code} %{time_total}' \
+                  "$url" || echo "000 0")"
+            fi
+          
+            # Extraction redirect location si 3xx
+            local location=""
+            if [[ "$code" =~ ^30(1|2|7|8)$ ]]; then
+              location="$(awk '/^Location:/ {sub(/\r$/,"",$0); print $2; exit}' "$tmp")"
+            fi
+            rm -f "$tmp"
+          
+            # Conversion en millisecondes + timestamp
+            local ms; ms="$(awk -v t="$time_total" 'BEGIN{printf("%d", t*1000)}')"
+            local ts; ts="$(date +%s%3N)"
+          
+            # Construction JSON avec pod info
+            if [[ -n "$location" ]]; then
+              results+=("$(printf '{"site":"%s","status":%d,"ms":%d,"pod":"%s","redir":"%s","ts":%d}' \
+                "$site" "$code" "$ms" "$POD_INFO" "$location" "$ts")")
+            else
+              results+=("$(printf '{"site":"%s","status":%d,"ms":%d,"pod":"%s","ts":%d}' \
+                "$site" "$code" "$ms" "$POD_INFO" "$ts")")
+            fi
+            
+            ((site_count++))
+          }
+          
+          # Scan tous les répertoires (= sites)
+          cd "$ROOT"
+          for d in *; do
+            [[ -d "$d" ]] || continue
+            [[ "$d" =~ $IGNORE_REGEX ]] && continue
+            probe_one "$d"
+          done
+          
+          # Log du résultat
+          echo "[$(date '+%Y-%m-%d %H:%M:%S')] Scanned $site_count sites on $POD_INFO" >> "$LOG_FILE"
+          
+          # Envoi batch vers Cloudflare
+          if [[ ${#results[@]} -gt 0 ]]; then
+            payload="[ $(IFS=,; echo "${results[*]}") ]"
+            
+            response=$(curl -sS -X POST "$WORKER_URL" \
+              -H "Authorization: Bearer $AUTH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$payload" -w "\n%{http_code}" 2>&1)
+            
+            http_code=$(echo "$response" | tail -n1)
+            
+            if [[ "$http_code" == "200" ]]; then
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] Successfully sent data to worker (${#results[@]} sites)" >> "$LOG_FILE"
+            else
+              echo "[$(date '+%Y-%m-%d %H:%M:%S')] Failed to send data. HTTP code: $http_code" >> "$LOG_FILE"
+            fi
+          else
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] No sites to scan" >> "$LOG_FILE"
+          fi
+      when: 
+        - not script_stat.stat.exists or force_update
+        - create_if_missing or script_stat.stat.exists
+        - not dry_run
+        
+    - name: "[DRY-RUN] Afficher ce qui serait fait"
+      debug:
+        msg:
+          - "Mode DRY-RUN activé"
+          - "Le script serait {{ 'créé' if not script_stat.stat.exists else 'exécuté' }} sur {{ inventory_hostname }}"
+      when: dry_run
+      
+    - name: Exécuter le script live_head.sh
+      shell: |
+        export WORKER_URL="{{ worker_url }}"
+        export AUTH_TOKEN="{{ auth_token }}"
+        timeout 60 {{ script_path }} 2>&1
+      register: script_output
+      ignore_errors: yes
+      when: 
+        - not dry_run
+        - script_stat.stat.exists or create_if_missing
+        
+    - name: Vérifier les logs d'exécution
+      shell: "tail -n 5 /var/log/live_head.log 2>/dev/null || echo 'Pas de logs'"
+      register: log_output
+      when: not dry_run
+      
+    - name: Rapport d'exécution
+      debug:
+        msg:
+          - "Serveur: {{ inventory_hostname }}"
+          - "Statut: {{ 'Succès' if script_output.rc == 0 else 'Échec (code: ' + script_output.rc|string + ')' }}"
+          - "Derniers logs: {{ log_output.stdout_lines | default(['N/A']) }}"
+      when: 
+        - not dry_run
+        - script_output is defined
+        
+  post_tasks:
+    - name: Résumé de l'exécution
+      debug:
+        msg:
+          - "=== RÉSUMÉ ==="
+          - "Serveurs traités: {{ play_hosts | length }}"
+          - "Succès: {{ ansible_play_hosts_all | difference(ansible_play_hosts_skipped | default([])) | length }}"
+          - "Échecs: {{ ansible_play_hosts_failed | default([]) | length }}"
+      run_once: true
+      when: not dry_run
