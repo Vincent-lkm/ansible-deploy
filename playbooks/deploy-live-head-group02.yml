@@ -1,0 +1,25 @@
+---
+- name: Deploy live_head.sh to group02
+  hosts: apache.group02.svc.cluster.local
+  vars:
+    ansible_ssh_common_args: '-o ProxyJump=bastion@infra.linkuma.ovh:2200 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    ansible_port: 2222
+    ansible_user: root
+    ansible_ssh_private_key_file: /Users/vincent/Documents/Config/ssh/vincent
+  
+  tasks:
+    - name: Copy live_head.sh script to server
+      copy:
+        src: /Users/vincent/Documents/Projets/live_head/live_head.sh
+        dest: /mnt/www/update/live_head.sh
+        mode: '0755'
+        owner: root
+        group: root
+    
+    - name: Verify script deployment
+      command: ls -la /mnt/www/update/live_head.sh
+      register: verify_result
+    
+    - name: Show verification result
+      debug:
+        var: verify_result.stdout

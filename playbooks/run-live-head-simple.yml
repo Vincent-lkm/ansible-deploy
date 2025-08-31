@@ -1,0 +1,24 @@
+---
+# Playbook simple pour lancer live_head.sh sur group01_only d'infra2
+- name: Lancer live_head.sh sur group01_only
+  hosts: group01_only
+  gather_facts: no
+  become: yes
+  
+  tasks:
+    - name: Vérifier si le script existe
+      stat:
+        path: /mnt/www/update/live_head.sh
+      register: script_exists
+      
+    - name: Exécuter live_head.sh
+      shell: |
+        export WORKER_URL="https://live-head.restless-dust-dcc3.workers.dev/push"
+        export AUTH_TOKEN="test123"
+        /mnt/www/update/live_head.sh
+      when: script_exists.stat.exists
+      register: result
+      
+    - name: Afficher le résultat
+      debug:
+        msg: "Script exécuté sur {{ inventory_hostname }} - Code retour: {{ result.rc | default('N/A') }}"
